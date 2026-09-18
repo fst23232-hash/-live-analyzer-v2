@@ -17,7 +17,7 @@ st.set_page_config(
 # CONFIGURAÇÕES
 # ------------------------------------------------------------
 
-SOFASCORE_API = "https://www.sofascore.com/api/v1"
+SOFASCORE_API = SOFASCORE_API = "https://api.sofascore.com/api/v1"
 
 st.title("⚽ Robô V2 - Live Analyzer")
 st.caption("Análise de jogos ao vivo usando dados do SofaScore")
