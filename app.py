@@ -378,12 +378,11 @@ if st.button(
 
 
 # Atualização automática
-if "jogos" not in st.session_state:
+if st.button(
+    "🔄 ATUALIZAR JOGOS",
+    use_container_width=True
+):
     st.session_state["jogos"] = buscar_jogos_ao_vivo()
-else:
-    st.session_state["jogos"] = buscar_jogos_ao_vivo()
-
-
 # ==============================
 # EXIBIÇÃO
 # ==============================
