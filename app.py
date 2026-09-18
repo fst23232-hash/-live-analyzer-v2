@@ -2,10 +2,6 @@ import streamlit as st
 import requests
 from datetime import datetime
 
-# ==========================================
-# CONFIGURAÇÃO
-# ==========================================
-
 st.set_page_config(
     page_title="Robô V2 - Live Analyzer",
     page_icon="⚽",
@@ -17,29 +13,26 @@ st.caption("Análise automática de futebol ao vivo")
 
 API_URL = "https://v3.football.api-sports.io"
 
-# ==========================================
-# CHAVE DA API
-# ==========================================
+# ==============================
+# API KEY
+# ==============================
 
 try:
     API_KEY = st.secrets["API_FOOTBALL_KEY"]
 except Exception:
     API_KEY = ""
 
-# ==========================================
-# FUNÇÃO PARA CONSULTAR A API
-# ==========================================
+# ==============================
+# CONSULTAR API
+# ==============================
 
 def consultar_api(endpoint, parametros=None):
 
     if not API_KEY:
-        st.error(
-            "❌ API Key não encontrada nos Secrets do Streamlit."
-        )
+        st.error("❌ API Key não encontrada nos Secrets do Streamlit.")
         return None
 
     try:
-
         resposta = requests.get(
             f"{API_URL}/{endpoint}",
             headers={
@@ -50,37 +43,31 @@ def consultar_api(endpoint, parametros=None):
         )
 
         if resposta.status_code != 200:
-
             st.error(
                 f"❌ Erro da API: HTTP {resposta.status_code}"
             )
-
             return None
 
         dados = resposta.json()
 
         if dados.get("errors"):
-
             st.error(
                 f"❌ API: {dados['errors']}"
             )
-
             return None
 
         return dados
 
     except Exception as erro:
-
         st.error(
             f"❌ Erro de conexão: {erro}"
         )
-
         return None
 
 
-# ==========================================
-# BUSCAR JOGOS AO VIVO
-# ==========================================
+# ==============================
+# JOGOS AO VIVO
+# ==============================
 
 def buscar_jogos_ao_vivo():
 
@@ -97,9 +84,9 @@ def buscar_jogos_ao_vivo():
     return dados.get("response", [])
 
 
-# ==========================================
-# BUSCAR ESTATÍSTICAS
-# ==========================================
+# ==============================
+# ESTATÍSTICAS
+# ==============================
 
 def buscar_estatisticas(fixture_id):
 
@@ -116,9 +103,9 @@ def buscar_estatisticas(fixture_id):
     return dados.get("response", [])
 
 
-# ==========================================
+# ==============================
 # EXTRAIR ESTATÍSTICAS
-# ==========================================
+# ==============================
 
 def extrair_estatisticas(dados):
 
@@ -143,6 +130,8 @@ def extrair_estatisticas(dados):
             []
         )
 
+        lado = "casa" if indice == 0 else "fora"
+
         for item in estatisticas:
 
             nome = str(
@@ -154,97 +143,62 @@ def extrair_estatisticas(dados):
             if valor is None:
                 continue
 
-            if indice == 0:
-                lado = "casa"
-            else:
-                lado = "fora"
-
-            # --------------------------
-            # ESCANTEIOS
-            # --------------------------
-
+            # Escanteios
             if "corner" in nome:
 
                 try:
                     resultado[
                         f"escanteios_{lado}"
                     ] = int(valor)
-
                 except:
                     pass
 
-            # --------------------------
-            # CHUTES
-            # --------------------------
-
+            # Chutes
             elif nome == "total shots":
 
                 try:
                     resultado[
                         f"chutes_{lado}"
                     ] = int(valor)
-
                 except:
                     pass
 
-            # --------------------------
-            # CHUTES NO ALVO
-            # --------------------------
-
+            # Chutes no alvo
             elif "shots on goal" in nome:
 
                 try:
                     resultado[
                         f"chutes_alvo_{lado}"
                     ] = int(valor)
-
                 except:
                     pass
 
-            # --------------------------
-            # POSSE
-            # --------------------------
-
+            # Posse
             elif "ball possession" in nome:
 
                 try:
-
                     resultado[
                         f"posse_{lado}"
                     ] = int(
                         str(valor).replace("%", "")
                     )
-
                 except:
                     pass
 
     return resultado
 
 
-# ==========================================
+# ==============================
 # ANALISAR JOGO
-# ==========================================
+# ==============================
 
 def analisar_jogo(jogo):
 
-    fixture = jogo.get(
-        "fixture",
-        {}
-    )
+    fixture = jogo.get("fixture", {})
+    teams = jogo.get("teams", {})
+    goals = jogo.get("goals", {})
 
-    teams = jogo.get(
-        "teams",
-        {}
-    )
-
-    goals = jogo.get(
-        "goals",
-        {}
-    )
-
-    fixture_id = fixture.get(
-        "id"
-    )
+    fixture_id = fixture.get("id")
 
     casa = teams.get(
         "home",
@@ -262,30 +216,14 @@ def analisar_jogo(jogo):
         "Fora"
     )
 
-    placar_casa = goals.get(
-        "home"
-    ) or 0
+    placar_casa = goals.get("home") or 0
+    placar_fora = goals.get("away") or 0
 
-    placar_fora = goals.get(
-        "away"
-    ) or 0
+    status = fixture.get("status", {})
 
-    status = fixture.get(
-        "status",
-        {}
-    )
+    minuto = status.get("elapsed") or 0
 
-    minuto = status.get(
-        "elapsed"
-    )
-
-    if minuto is None:
-        minuto = 0
-
-    # ======================================
-    # ESTATÍSTICAS
-    # ======================================
-
+    # Estatísticas
     dados_stats = buscar_estatisticas(
         fixture_id
     )
@@ -317,20 +255,18 @@ def analisar_jogo(jogo):
         stats["chutes_alvo_fora"]
     )
 
-    # ======================================
-    # SISTEMA DE PONTOS
-    # ======================================
-
-    pontos = 0
-
-    sinais = []
-
     gols_total = (
         placar_casa +
         placar_fora
     )
 
-    # Jogo empatado
+    # ==============================
+    # PONTUAÇÃO
+    # ==============================
+
+    pontos = 0
+    sinais = []
+
     if placar_casa == placar_fora:
 
         pontos += 10
@@ -339,7 +275,6 @@ def analisar_jogo(jogo):
             "⚖️ Jogo empatado"
         )
 
-    # Escanteios
     if escanteios_total >= 4:
 
         pontos += 15
@@ -364,7 +299,6 @@ def analisar_jogo(jogo):
             "🚨 Volume muito alto de escanteios"
         )
 
-    # Chutes
     if chutes_total >= 10:
 
         pontos += 10
@@ -373,7 +307,6 @@ def analisar_jogo(jogo):
             "🎯 Muitos chutes"
         )
 
-    # Chutes no alvo
     if chutes_alvo_total >= 5:
 
         pontos += 15
@@ -382,7 +315,6 @@ def analisar_jogo(jogo):
             "🥅 Pressão com chutes no alvo"
         )
 
-    # Poucos gols
     if gols_total <= 1:
 
         pontos += 10
@@ -391,9 +323,9 @@ def analisar_jogo(jogo):
             "⚽ Poucos gols até agora"
         )
 
-    # ======================================
+    # ==============================
     # NÍVEL
-    # ======================================
+    # ==============================
 
     if pontos >= 60:
 
@@ -428,9 +360,9 @@ def analisar_jogo(jogo):
     }
 
 
-# ==========================================
-# BOTÃO ATUALIZAR
-# ==========================================
+# ==============================
+# BOTÃO
+# ==============================
 
 if st.button(
     "🔄 ATUALIZAR JOGOS",
@@ -442,9 +374,9 @@ if st.button(
     st.session_state["jogos"] = jogos
 
 
-# ==========================================
+# ==============================
 # EXIBIÇÃO
-# ==========================================
+# ==============================
 
 if "jogos" not in st.session_state:
 
@@ -474,15 +406,11 @@ else:
 
             try:
 
-                analise = analisar_jogo(
-                    jogo
-                )
+                analise = analisar_jogo(jogo)
 
-                analises.append(
-                    analise
-                )
+                analises.append(analise)
 
-            except Exception as erro:
+            except Exception:
 
                 continue
 
@@ -490,10 +418,6 @@ else:
             key=lambda x: x["pontos"],
             reverse=True
         )
-
-        # ==================================
-        # ALERTAS
-        # ==================================
 
         for analise in analises:
 
@@ -555,9 +479,9 @@ else:
                     )
 
 
-# ==========================================
+# ==============================
 # RODAPÉ
-# ==========================================
+# ==============================
 
 st.markdown("---")
 
