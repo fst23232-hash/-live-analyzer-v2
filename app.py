@@ -1,11 +1,12 @@
 import streamlit as st
-import requests
 from datetime import datetime
+from curl_cffi import requests
 
-# ============================================================
-# ROBÔ V2 - LIVE ANALYZER
-# SofaScore + análise de jogos ao vivo
-# ============================================================
+# ==============================
+# CONFIGURAÇÃO
+# ==============================
+
+SOFASCORE_API = "https://api.sofascore.com/api/v1"
 
 st.set_page_config(
     page_title="Robô V2 - Live Analyzer",
@@ -13,34 +14,39 @@ st.set_page_config(
     layout="wide"
 )
 
-# ------------------------------------------------------------
-# CONFIGURAÇÕES
-# ------------------------------------------------------------
-
-SOFASCORE_API = SOFASCORE_API = "https://api.sofascore.com/api/v1"
-
 st.title("⚽ Robô V2 - Live Analyzer")
-st.caption("Análise de jogos ao vivo usando dados do SofaScore")
+st.caption("Análise automática de jogos ao vivo")
 
-# ------------------------------------------------------------
-# FUNÇÃO PARA BUSCAR JOGOS AO VIVO
-# ------------------------------------------------------------
+# ==============================
+# SESSÃO SOFASCORE
+# ==============================
+
+def criar_sessao():
+    return requests.Session(
+        impersonate="chrome"
+    )
+
+
+# ==============================
+# BUSCAR JOGOS AO VIVO
+# ==============================
 
 def buscar_jogos_ao_vivo():
+
     url = f"{SOFASCORE_API}/sport/football/events/live"
 
     try:
-        resposta = requests.get(
+
+        sessao = criar_sessao()
+
+        resposta = sessao.get(
             url,
-            timeout=10,
+            timeout=20,
             headers={
-                headers={
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.sofascore.com/",
-    "Origin": "https://www.sofascore.com",
-    "X-Requested-With": "XMLHttpRequest"
-}
+                "Accept": "application/json, text/plain, */*",
+                "Referer": "https://www.sofascore.com/",
+                "Origin": "https://www.sofascore.com",
+                "X-Requested-With": "XMLHttpRequest"
             }
         )
 
@@ -51,13 +57,110 @@ def buscar_jogos_ao_vivo():
         return dados.get("events", [])
 
     except Exception as erro:
+
         st.error(f"Erro ao buscar jogos: {erro}")
+
         return []
 
 
-# ------------------------------------------------------------
+# ==============================
+# BUSCAR ESTATÍSTICAS
+# ==============================
+
+def buscar_estatisticas(event_id):
+
+    url = f"{SOFASCORE_API}/event/{event_id}/statistics"
+
+    try:
+
+        sessao = criar_sessao()
+
+        resposta = sessao.get(
+            url,
+            timeout=15,
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Referer": "https://www.sofascore.com/",
+                "Origin": "https://www.sofascore.com",
+                "X-Requested-With": "XMLHttpRequest"
+            }
+        )
+
+        resposta.raise_for_status()
+
+        return resposta.json()
+
+    except Exception:
+
+        return {}
+
+
+# ==============================
+# EXTRAIR ESCANTEIOS
+# ==============================
+
+def pegar_escanteios(dados):
+
+    casa = 0
+    fora = 0
+
+    try:
+
+        estatisticas = dados.get("statistics", [])
+
+        for periodo in estatisticas:
+
+            if periodo.get("period") != "ALL":
+                continue
+
+            grupos = periodo.get("groups", [])
+
+            for grupo in grupos:
+
+                itens = grupo.get("statisticsItems", [])
+
+                for item in itens:
+
+                    nome = str(item.get("name", "")).lower()
+
+                    if "corner" in nome or "escante" in nome:
+
+                        valor_casa = item.get("homeValue")
+                        valor_fora = item.get("awayValue")
+
+                        if valor_casa is None:
+                            valor_casa = item.get("home", 0)
+
+                        if valor_fora is None:
+                            valor_fora = item.get("away", 0)
+
+                        try:
+                            casa = int(
+                                str(valor_casa)
+                                .replace("%", "")
+                            )
+                        except:
+                            casa = 0
+
+                        try:
+                            fora = int(
+                                str(valor_fora)
+                                .replace("%", "")
+                            )
+                        except:
+                            fora = 0
+
+                        return casa, fora
+
+    except Exception:
+        pass
+
+    return casa, fora
+
+
+# ==============================
 # ANÁLISE DO JOGO
-# ------------------------------------------------------------
+# ==============================
 
 def analisar_jogo(jogo):
 
@@ -67,83 +170,153 @@ def analisar_jogo(jogo):
     nome_casa = home.get("name", "Casa")
     nome_fora = away.get("name", "Fora")
 
-    placar = jogo.get("homeScore", {}).get("current", 0)
-    placar_fora = jogo.get("awayScore", {}).get("current", 0)
+    placar_casa = jogo.get(
+        "homeScore", {}
+    ).get("current", 0)
 
-    tempo = jogo.get("status", {}).get("type", "")
+    placar_fora = jogo.get(
+        "awayScore", {}
+    ).get("current", 0)
 
-    minuto = jogo.get("status", {}).get("description", "")
+    status = jogo.get("status", {})
 
-    # --------------------------------------------------------
-    # DADOS DE ESCANTEIOS
-    # --------------------------------------------------------
-
-    escanteios_casa = jogo.get("homeScore", {}).get(
-        "period1Corners", 0
+    tempo = status.get(
+        "description",
+        "Ao vivo"
     )
 
-    escanteios_fora = jogo.get("awayScore", {}).get(
-        "period1Corners", 0
+    event_id = jogo.get("id")
+
+    # --------------------------
+    # ESTATÍSTICAS
+    # --------------------------
+
+    dados_estatisticas = buscar_estatisticas(
+        event_id
+    )
+
+    escanteios_casa, escanteios_fora = pegar_escanteios(
+        dados_estatisticas
     )
 
     escanteios_total = (
-        (escanteios_casa or 0) +
-        (escanteios_fora or 0)
+        escanteios_casa +
+        escanteios_fora
     )
 
-    # --------------------------------------------------------
-    # SISTEMA DE PONTUAÇÃO
-    # --------------------------------------------------------
+    # --------------------------
+    # PONTUAÇÃO
+    # --------------------------
 
     pontos = 0
+
     sinais = []
 
+    gols = (
+        placar_casa +
+        placar_fora
+    )
+
     # Jogo empatado
-    if placar == placar_fora:
+    if placar_casa == placar_fora:
+
         pontos += 10
-        sinais.append("⚖️ Jogo empatado")
+
+        sinais.append(
+            "⚖️ Jogo empatado"
+        )
 
     # Muitos escanteios
     if escanteios_total >= 5:
+
         pontos += 25
-        sinais.append("🚩 Muitos escanteios")
 
+        sinais.append(
+            "🚩 Muitos escanteios"
+        )
+
+    # Pressão forte
     if escanteios_total >= 7:
+
         pontos += 20
-        sinais.append("🔥 Pressão forte em escanteios")
 
-    # Jogo sem muitos gols
-    gols = (placar or 0) + (placar_fora or 0)
+        sinais.append(
+            "🔥 Pressão forte em escanteios"
+        )
 
+    # Poucos gols
     if gols <= 1:
-        pontos += 15
-        sinais.append("⚽ Poucos gols até agora")
 
-    # Classificação
-    if pontos >= 50:
+        pontos += 15
+
+        sinais.append(
+            "⚽ Poucos gols até agora"
+        )
+
+    # Jogo com muitos escanteios
+    if escanteios_total >= 9:
+
+        pontos += 15
+
+        sinais.append(
+            "🚨 Volume muito alto de escanteios"
+        )
+
+    # --------------------------
+    # NÍVEL
+    # --------------------------
+
+    if pontos >= 60:
+
         nivel = "🔥 CHANCE QUENTE"
-    elif pontos >= 30:
-        nivel = "🟡 ATENÇÃO"
+
+    elif pontos >= 40:
+
+        nivel = "🟠 ATENÇÃO"
+
+    elif pontos >= 25:
+
+        nivel = "🟡 MONITORAR"
+
     else:
+
         nivel = "⚪ NORMAL"
 
     return {
+
+        "id": event_id,
+
         "casa": nome_casa,
+
         "fora": nome_fora,
-        "placar": f"{placar} x {placar_fora}",
-        "tempo": minuto,
+
+        "placar": f"{placar_casa} x {placar_fora}",
+
+        "tempo": tempo,
+
+        "escanteios_casa": escanteios_casa,
+
+        "escanteios_fora": escanteios_fora,
+
         "escanteios": escanteios_total,
+
         "pontos": pontos,
+
         "nivel": nivel,
+
         "sinais": sinais
+
     }
 
 
-# ------------------------------------------------------------
+# ==============================
 # BOTÃO ATUALIZAR
-# ------------------------------------------------------------
+# ==============================
 
-if st.button("🔄 ATUALIZAR JOGOS", use_container_width=True):
+if st.button(
+    "🔄 ATUALIZAR JOGOS",
+    use_container_width=True
+):
 
     st.cache_data.clear()
 
@@ -152,15 +325,20 @@ if st.button("🔄 ATUALIZAR JOGOS", use_container_width=True):
     st.session_state["jogos"] = jogos
 
 
-# ------------------------------------------------------------
-# CARREGAR JOGOS
-# ------------------------------------------------------------
+# ==============================
+# PRIMEIRO ACESSO
+# ==============================
 
 if "jogos" not in st.session_state:
 
     st.info(
-        "Clique em **ATUALIZAR JOGOS** para buscar partidas ao vivo."
+        "Clique em 🔄 ATUALIZAR JOGOS para buscar partidas ao vivo."
     )
+
+
+# ==============================
+# MOSTRAR JOGOS
+# ==============================
 
 else:
 
@@ -168,7 +346,9 @@ else:
 
     if not jogos:
 
-        st.warning("Nenhum jogo ao vivo encontrado.")
+        st.warning(
+            "Nenhum jogo ao vivo encontrado."
+        )
 
     else:
 
@@ -176,37 +356,29 @@ else:
             f"⚽ {len(jogos)} jogos encontrados ao vivo"
         )
 
-        # ----------------------------------------------------
-        # ANALISAR TODOS OS JOGOS
-        # ----------------------------------------------------
-
         analises = []
 
         for jogo in jogos:
 
             try:
 
-                analise = analisar_jogo(jogo)
+                analise = analisar_jogo(
+                    jogo
+                )
 
-                analises.append(analise)
+                analises.append(
+                    analise
+                )
 
             except Exception:
                 continue
 
-
-        # ----------------------------------------------------
-        # ORDENAR PELAS MAIORES PONTUAÇÕES
-        # ----------------------------------------------------
+        # Ordenar pelas maiores pontuações
 
         analises.sort(
             key=lambda x: x["pontos"],
             reverse=True
         )
-
-
-        # ----------------------------------------------------
-        # MOSTRAR RESULTADOS
-        # ----------------------------------------------------
 
         for analise in analises:
 
@@ -239,6 +411,11 @@ else:
                     analise["escanteios"]
                 )
 
+                st.caption(
+                    f"Casa: {analise['escanteios_casa']} | "
+                    f"Fora: {analise['escanteios_fora']}"
+                )
+
             with col3:
 
                 st.metric(
@@ -250,14 +427,11 @@ else:
                     analise["nivel"]
                 )
 
-
-            # ------------------------------------------------
-            # SINAIS
-            # ------------------------------------------------
-
             if analise["sinais"]:
 
-                st.write("📊 **Sinais detectados:**")
+                st.write(
+                    "📊 **Sinais detectados:**"
+                )
 
                 for sinal in analise["sinais"]:
 
@@ -266,17 +440,20 @@ else:
                     )
 
 
-# ------------------------------------------------------------
+# ==============================
 # RODAPÉ
-# ------------------------------------------------------------
+# ==============================
 
 st.markdown("---")
 
 st.caption(
-    f"Robô V2 • Última atualização: "
-    f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+    "Robô V2 • Última atualização: "
+    + datetime.now().strftime(
+        "%d/%m/%Y %H:%M:%S"
+    )
 )
 
 st.warning(
-    "⚠️ O sistema apresenta análise estatística e não garante resultados."
+    "⚠️ O sistema apresenta análise estatística "
+    "e não garante resultados."
 )
