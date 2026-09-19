@@ -825,7 +825,7 @@ else:
                 f"Event ID: {event_id}"
             )
 
-            st.write(
+                st.write(
                 f"Total de estatísticas: "
                 f"{len(estatisticas)}"
             )
