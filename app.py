@@ -1,41 +1,67 @@
 import streamlit as st
 import requests
 from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
+from typing import Optional
+
+
+# ==========================================
+# CONFIGURAÇÃO
+# ==========================================
 
 st.set_page_config(
     page_title="Robô V2 - Live Analyzer",
     page_icon="⚽",
     layout="wide"
 )
-# Atualização automática a cada 60 segundos
-
 
 st.title("⚽ Robô V2 - Live Analyzer")
-st.caption("Análise automática de futebol ao vivo")
+st.caption("Análise estatística de futebol ao vivo")
+
 
 API_URL = "https://v3.football.api-sports.io"
 
-# ==============================
+# Limite de segurança por atualização
+MAX_JOGOS = 5
+
+
+# ==========================================
 # API KEY
-# ==============================
+# ==========================================
 
 try:
     API_KEY = st.secrets["API_FOOTBALL_KEY"]
 except Exception:
     API_KEY = ""
 
-# ==============================
+
+# ==========================================
+# CONTROLE DE STATUS
+# ==========================================
+
+if "ultima_atualizacao" not in st.session_state:
+    st.session_state["ultima_atualizacao"] = None
+
+if "jogos" not in st.session_state:
+    st.session_state["jogos"] = []
+
+if "erro_api" not in st.session_state:
+    st.session_state["erro_api"] = None
+
+
+# ==========================================
 # CONSULTAR API
-# ==============================
+# ==========================================
 
 def consultar_api(endpoint, parametros=None):
 
     if not API_KEY:
-        st.error("❌ API Key não encontrada nos Secrets do Streamlit.")
+        st.session_state["erro_api"] = (
+            "API Key não encontrada nos Secrets do Streamlit."
+        )
         return None
 
     try:
+
         resposta = requests.get(
             f"{API_URL}/{endpoint}",
             headers={
@@ -45,45 +71,63 @@ def consultar_api(endpoint, parametros=None):
             timeout=20
         )
 
-        if resposta.status_code != 200:
-            st.error(
-                f"❌ Erro da API: HTTP {resposta.status_code}"
+        # Limite da API
+        if resposta.status_code == 429:
+
+            st.session_state["erro_api"] = (
+                "Limite de requisições da API atingido (HTTP 429)."
             )
+
+            return None
+
+        # Problema de autorização
+        if resposta.status_code in (401, 403):
+
+            st.session_state["erro_api"] = (
+                f"API recusou a requisição (HTTP {resposta.status_code})."
+            )
+
+            return None
+
+        if resposta.status_code != 200:
+
+            st.session_state["erro_api"] = (
+                f"Erro da API: HTTP {resposta.status_code}"
+            )
+
             return None
 
         dados = resposta.json()
 
         if dados.get("errors"):
-            st.error(
-                f"❌ API: {dados['errors']}"
+
+            erros = dados.get("errors")
+
+            st.session_state["erro_api"] = (
+                f"API: {erros}"
             )
+
             return None
+
+        st.session_state["erro_api"] = None
 
         return dados
 
-    except Exception as erro:
-        st.error(
-            f"❌ Erro de conexão: {erro}"
+    except requests.RequestException as erro:
+
+        st.session_state["erro_api"] = (
+            f"Erro de conexão: {erro}"
         )
+
         return None
 
 
-# ==============================
-# JOGOS AO VIVO
-# ==============================
+# ==========================================
+# BUSCAR JOGOS AO VIVO
+# ==========================================
 
 def buscar_jogos_ao_vivo():
-if st.button(
-    "🔄 ATUALIZAR JOGOS",
-    use_container_width=True
-):
 
-    jogos = buscar_jogos_ao_vivo()
-
-    # Limita a análise aos 5 primeiros jogos
-    jogos = jogos[:5]
-
-    st.session_state["jogos"] = jogos
     dados = consultar_api(
         "fixtures",
         {
@@ -97,10 +141,11 @@ if st.button(
     return dados.get("response", [])
 
 
-# ==============================
-# ESTATÍSTICAS
-# ==============================
+# ==========================================
+# BUSCAR ESTATÍSTICAS
+# ==========================================
 
+@st.cache_data(ttl=120)
 def buscar_estatisticas(fixture_id):
 
     dados = consultar_api(
@@ -116,9 +161,29 @@ def buscar_estatisticas(fixture_id):
     return dados.get("response", [])
 
 
-# ==============================
+# ==========================================
+# CONVERTER VALOR
+# ==========================================
+
+def converter_inteiro(valor):
+
+    if valor is None:
+        return 0
+
+    try:
+
+        if isinstance(valor, str):
+            valor = valor.replace("%", "").strip()
+
+        return int(valor)
+
+    except Exception:
+        return 0
+
+
+# ==========================================
 # EXTRAIR ESTATÍSTICAS
-# ==============================
+# ==========================================
 
 def extrair_estatisticas(dados):
 
@@ -138,12 +203,12 @@ def extrair_estatisticas(dados):
 
     for indice, equipe in enumerate(dados[:2]):
 
+        lado = "casa" if indice == 0 else "fora"
+
         estatisticas = equipe.get(
             "statistics",
             []
         )
-
-        lado = "casa" if indice == 0 else "fora"
 
         for item in estatisticas:
 
@@ -156,62 +221,73 @@ def extrair_estatisticas(dados):
             if valor is None:
                 continue
 
-            # Escanteios
+            # --------------------------
+            # ESCANTEIOS
+            # --------------------------
+
             if "corner" in nome:
 
-                try:
-                    resultado[
-                        f"escanteios_{lado}"
-                    ] = int(valor)
-                except:
-                    pass
+                resultado[
+                    f"escanteios_{lado}"
+                ] = converter_inteiro(valor)
 
-            # Chutes
+            # --------------------------
+            # CHUTES
+            # --------------------------
+
             elif nome == "total shots":
 
-                try:
-                    resultado[
-                        f"chutes_{lado}"
-                    ] = int(valor)
-                except:
-                    pass
+                resultado[
+                    f"chutes_{lado}"
+                ] = converter_inteiro(valor)
 
-            # Chutes no alvo
+            # --------------------------
+            # CHUTES NO ALVO
+            # --------------------------
+
             elif "shots on goal" in nome:
 
-                try:
-                    resultado[
-                        f"chutes_alvo_{lado}"
-                    ] = int(valor)
-                except:
-                    pass
+                resultado[
+                    f"chutes_alvo_{lado}"
+                ] = converter_inteiro(valor)
 
-            # Posse
+            # --------------------------
+            # POSSE
+            # --------------------------
+
             elif "ball possession" in nome:
 
-                try:
-                    resultado[
-                        f"posse_{lado}"
-                    ] = int(
-                        str(valor).replace("%", "")
-                    )
-                except:
-                    pass
+                resultado[
+                    f"posse_{lado}"
+                ] = converter_inteiro(valor)
 
     return resultado
 
 
-# ==============================
+# ==========================================
 # ANALISAR JOGO
-# ==============================
+# ==========================================
 
 def analisar_jogo(jogo):
 
-    fixture = jogo.get("fixture", {})
-    teams = jogo.get("teams", {})
-    goals = jogo.get("goals", {})
+    fixture = jogo.get(
+        "fixture",
+        {}
+    )
 
-    fixture_id = fixture.get("id")
+    teams = jogo.get(
+        "teams",
+        {}
+    )
+
+    goals = jogo.get(
+        "goals",
+        {}
+    )
+
+    fixture_id = fixture.get(
+        "id"
+    )
 
     casa = teams.get(
         "home",
@@ -229,14 +305,27 @@ def analisar_jogo(jogo):
         "Fora"
     )
 
-    placar_casa = goals.get("home") or 0
-    placar_fora = goals.get("away") or 0
+    placar_casa = goals.get(
+        "home"
+    ) or 0
 
-    status = fixture.get("status", {})
+    placar_fora = goals.get(
+        "away"
+    ) or 0
 
-    minuto = status.get("elapsed") or 0
+    status = fixture.get(
+        "status",
+        {}
+    )
 
-    # Estatísticas
+    minuto = status.get(
+        "elapsed"
+    ) or 0
+
+    # ======================================
+    # ESTATÍSTICAS
+    # ======================================
+
     dados_stats = buscar_estatisticas(
         fixture_id
     )
@@ -273,11 +362,12 @@ def analisar_jogo(jogo):
         placar_fora
     )
 
-    # ==============================
+    # ======================================
     # PONTUAÇÃO
-    # ==============================
+    # ======================================
 
     pontos = 0
+
     sinais = []
 
     if placar_casa == placar_fora:
@@ -336,9 +426,9 @@ def analisar_jogo(jogo):
             "⚽ Poucos gols até agora"
         )
 
-    # ==============================
+    # ======================================
     # NÍVEL
-    # ==============================
+    # ======================================
 
     if pontos >= 60:
 
@@ -373,142 +463,188 @@ def analisar_jogo(jogo):
     }
 
 
-# ==============================
-# BOTÃO
-# ==============================
+# ==========================================
+# BOTÃO DE ATUALIZAÇÃO
+# ==========================================
 
 if st.button(
     "🔄 ATUALIZAR JOGOS",
     use_container_width=True
 ):
-    st.session_state["jogos"] = buscar_jogos_ao_vivo()
+
+    # Limpa o cache de estatísticas
+    buscar_estatisticas.clear()
+
+    # Uma única consulta para descobrir jogos
+    jogos = buscar_jogos_ao_vivo()
+
+    # Limite de segurança
+    jogos = jogos[:MAX_JOGOS]
+
+    st.session_state["jogos"] = jogos
+
+    st.session_state["ultima_atualizacao"] = (
+        datetime.now()
+    )
 
 
-# Atualização automática
-if st.button(
-    "🔄 ATUALIZAR JOGOS",
-    use_container_width=True
-):
-    st.session_state["jogos"] = buscar_jogos_ao_vivo()
-# ==============================
+# ==========================================
+# ERROS
+# ==========================================
+
+if st.session_state["erro_api"]:
+
+    st.error(
+        f"❌ {st.session_state['erro_api']}"
+    )
+
+
+# ==========================================
 # EXIBIÇÃO
-# ==============================
+# ==========================================
 
-if "jogos" not in st.session_state:
+if not st.session_state["jogos"]:
 
     st.info(
-        "👆 Clique em 🔄 ATUALIZAR JOGOS"
+        "👆 Clique em 🔄 ATUALIZAR JOGOS "
+        "para consultar as partidas."
     )
 
 else:
 
     jogos = st.session_state["jogos"]
 
-    if not jogos:
+    st.success(
+        f"⚽ {len(jogos)} jogos selecionados para análise"
+    )
 
-        st.warning(
-            "⚽ Nenhum jogo ao vivo encontrado neste momento."
+    if st.session_state["ultima_atualizacao"]:
+
+        hora = st.session_state[
+            "ultima_atualizacao"
+        ].strftime(
+            "%d/%m/%Y %H:%M:%S"
         )
 
-    else:
-
-        st.success(
-            f"⚽ {len(jogos)} jogos ao vivo encontrados"
+        st.caption(
+            f"Última atualização: {hora}"
         )
 
-        analises = []
+    analises = []
 
-        for jogo in jogos:
+    # ======================================
+    # ANALISAR PARTIDAS
+    # ======================================
 
-            try:
+    for jogo in jogos:
 
-                analise = analisar_jogo(jogo)
+        try:
 
-                analises.append(analise)
+            analise = analisar_jogo(
+                jogo
+            )
 
-            except Exception:
+            analises.append(
+                analise
+            )
 
-                continue
+        except Exception:
 
-        analises.sort(
-            key=lambda x: x["pontos"],
-            reverse=True
-        )
+            continue
 
-        for analise in analises:
+    analises.sort(
+        key=lambda x: x["pontos"],
+        reverse=True
+    )
 
-            if analise["pontos"] < 20:
-                continue
+    # ======================================
+    # MOSTRAR ANÁLISES
+    # ======================================
 
-            st.markdown("---")
+    for analise in analises:
 
-            col1, col2, col3 = st.columns(3)
+        if analise["pontos"] < 20:
+            continue
 
-            with col1:
+        st.markdown("---")
 
-                st.subheader(
-                    f"🏟️ {analise['casa']} x {analise['fora']}"
-                )
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+
+            st.subheader(
+                f"🏟️ {analise['casa']} x "
+                f"{analise['fora']}"
+            )
+
+            st.write(
+                f"⏱️ {analise['minuto']}'"
+            )
+
+        with col2:
+
+            st.metric(
+                "Placar",
+                analise["placar"]
+            )
+
+            st.metric(
+                "🚩 Escanteios",
+                analise["escanteios"]
+            )
+
+            st.write(
+                f"Casa: {analise['escanteios_casa']} | "
+                f"Fora: {analise['escanteios_fora']}"
+            )
+
+            st.write(
+                f"🎯 Chutes: {analise['chutes']}"
+            )
+
+            st.write(
+                f"🥅 Chutes no alvo: "
+                f"{analise['chutes_alvo']}"
+            )
+
+        with col3:
+
+            st.metric(
+                "Pontuação",
+                f"{analise['pontos']} / 100"
+            )
+
+            st.write(
+                analise["nivel"]
+            )
+
+        if analise["sinais"]:
+
+            st.write(
+                "📊 **Sinais detectados:**"
+            )
+
+            for sinal in analise["sinais"]:
 
                 st.write(
-                    f"⏱️ {analise['minuto']}'"
+                    f"- {sinal}"
                 )
 
-            with col2:
 
-                st.metric(
-                    "Placar",
-                    analise["placar"]
-                )
-
-                st.metric(
-                    "🚩 Escanteios",
-                    analise["escanteios"]
-                )
-
-                st.write(
-                    f"Casa: {analise['escanteios_casa']} | "
-                    f"Fora: {analise['escanteios_fora']}"
-                )
-
-            with col3:
-
-                st.metric(
-                    "Pontuação",
-                    f"{analise['pontos']} / 100"
-                )
-
-                st.write(
-                    analise["nivel"]
-                )
-
-            if analise["sinais"]:
-
-                st.write(
-                    "📊 **Sinais detectados:**"
-                )
-
-                for sinal in analise["sinais"]:
-
-                    st.write(
-                        f"- {sinal}"
-                    )
-
-
-# ==============================
+# ==========================================
 # RODAPÉ
-# ==============================
+# ==========================================
 
 st.markdown("---")
 
 st.caption(
-    "Robô V2 • "
+    "Robô V2.2 • "
     + datetime.now().strftime(
         "%d/%m/%Y %H:%M:%S"
     )
 )
 
 st.warning(
-    "⚠️ Esta ferramenta apresenta dados e "
-    "análise estatística. Não garante resultados."
+    "⚠️ Ferramenta de análise estatística. "
+    "Não garante resultados de apostas."
 )
