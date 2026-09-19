@@ -821,7 +821,7 @@ else:
             "🔎 Dados recebidos do SofaScore"
         ):
 
-            st.write(
+st.write(
                 f"Event ID: {event_id}"
             )
 
