@@ -13,51 +13,35 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚽ Robô V2 - Live Analyzer")
-st.caption("Análise automática de futebol ao vivo com dados do SofaScore")
-
 BASE_URL = "https://www.sofascore.com/api/v1"
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0 Safari/537.36"
-    ),
-    "Accept": "application/json",
-}
-
-MAX_JOGOS = 30
-
+st.title("⚽ Robô V2 - Live Analyzer")
+st.caption("Análise automática de futebol ao vivo usando dados do SofaScore")
 
 # ============================================================
-# FUNÇÃO GENÉRICA DE REQUISIÇÃO
+# FUNÇÕES
 # ============================================================
 
 def requisicao(url):
-
     try:
         resposta = requests.get(
             url,
-            headers=HEADERS,
-            timeout=15
+            timeout=10,
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            }
         )
 
-        if resposta.status_code == 200:
-            return resposta.json()
+        if resposta.status_code != 200:
+            return {}
 
-        return {}
+        return resposta.json()
 
     except Exception:
         return {}
 
 
-# ============================================================
-# JOGOS AO VIVO
-# ============================================================
-
 def buscar_jogos_ao_vivo():
-
     url = f"{BASE_URL}/sport/football/events/live"
 
     dados = requisicao(url)
@@ -65,796 +49,425 @@ def buscar_jogos_ao_vivo():
     return dados.get("events", [])
 
 
-# ============================================================
-# ESTATÍSTICAS
-# ============================================================
-
-def buscar_estatisticas(event_id):
-
+def obter_estatisticas(event_id):
     url = f"{BASE_URL}/event/{event_id}/statistics"
 
     dados = requisicao(url)
 
-    resultado = {}
-
-    for periodo in dados.get("statistics", []):
-
-        if periodo.get("period") != "ALL":
-            continue
-
-        for grupo in periodo.get("groups", []):
-
-            for item in grupo.get("statisticsItems", []):
-
-                nome = item.get("name", "")
-
-                resultado[nome] = {
-                    "home": item.get("home"),
-                    "away": item.get("away")
-                }
-
-    return resultado
+    return dados.get("statistics", [])
 
 
-# ============================================================
-# INCIDENTES
-# ============================================================
-
-def buscar_incidentes(event_id):
-
-    url = f"{BASE_URL}/event/{event_id}/incidents"
+def obter_periodo_atual(event_id):
+    url = f"{BASE_URL}/event/{event_id}"
 
     dados = requisicao(url)
 
-    return dados.get("incidents", [])
+    return dados.get("event", {})
 
-
-# ============================================================
-# MOMENTUM
-# ============================================================
-
-def buscar_momentum(event_id):
-
-    url = f"{BASE_URL}/event/{event_id}/graph"
-
-    dados = requisicao(url)
-
-    return dados.get("graphPoints", [])
-
-
-# ============================================================
-# CONVERTER NÚMEROS
-# ============================================================
 
 def numero(valor):
-
-    if valor is None:
-        return 0.0
-
     try:
-
-        texto = str(valor)
-
-        texto = texto.replace("%", "")
-        texto = texto.replace(",", ".")
-
-        return float(texto)
-
+        return int(valor)
     except Exception:
-
-        return 0.0
-
-
-# ============================================================
-# PEGAR ESTATÍSTICA
-# ============================================================
-
-def pegar_stat(estatisticas, nomes):
-
-    for nome in nomes:
-
-        if nome in estatisticas:
-
-            dados = estatisticas[nome]
-
-            return (
-                numero(dados.get("home")),
-                numero(dados.get("away"))
-            )
-
-    return 0.0, 0.0
+        return 0
 
 
-# ============================================================
-# ANÁLISE DO JOGO
-# ============================================================
+def analisar_jogo(evento):
+    home = evento.get("homeTeam", {})
+    away = evento.get("awayTeam", {})
 
-def analisar_jogo(jogo):
+    nome_casa = home.get("name", "Casa")
+    nome_fora = away.get("name", "Fora")
 
-    home = jogo.get(
-        "homeTeam", {}
-    ).get(
-        "name",
-        "Casa"
+    placar_casa = numero(
+        evento.get("homeScore", {}).get("current", 0)
     )
 
-    away = jogo.get(
-        "awayTeam", {}
-    ).get(
-        "name",
-        "Fora"
+    placar_fora = numero(
+        evento.get("awayScore", {}).get("current", 0)
     )
 
-    home_score = jogo.get(
-        "homeScore", {}
-    ).get(
-        "current",
-        0
+    minuto = evento.get("time", {}).get("current", 0)
+
+    status = evento.get("status", {}).get("type", "")
+
+    # --------------------------------------------------------
+    # ESTATÍSTICAS
+    # --------------------------------------------------------
+
+    estatisticas = obter_estatisticas(
+        evento.get("id")
     )
 
-    away_score = jogo.get(
-        "awayScore", {}
-    ).get(
-        "current",
-        0
+    escanteios_casa = 0
+    escanteios_fora = 0
+
+    ataques_casa = 0
+    ataques_fora = 0
+
+    ataques_perigosos_casa = 0
+    ataques_perigosos_fora = 0
+
+    finalizacoes_casa = 0
+    finalizacoes_fora = 0
+
+    chutes_no_gol_casa = 0
+    chutes_no_gol_fora = 0
+
+    posse_casa = 0
+    posse_fora = 0
+
+    # --------------------------------------------------------
+    # LEITURA DAS ESTATÍSTICAS DO SOFASCORE
+    # --------------------------------------------------------
+
+    if estatisticas:
+
+        for periodo in estatisticas:
+
+            grupos = periodo.get("groups", [])
+
+            for grupo in grupos:
+
+                itens = grupo.get("statisticsItems", [])
+
+                for item in itens:
+
+                    nome = str(
+                        item.get("name", "")
+                    ).lower()
+
+                    casa = item.get("home")
+                    fora = item.get("away")
+
+                    casa = numero(casa)
+                    fora = numero(fora)
+
+                    if "corner" in nome or "escante" in nome:
+                        escanteios_casa = casa
+                        escanteios_fora = fora
+
+                    elif "dangerous attack" in nome or "ataques perigosos" in nome:
+                        ataques_perigosos_casa = casa
+                        ataques_perigosos_fora = fora
+
+                    elif "attack" in nome or "ataques" in nome:
+                        ataques_casa = casa
+                        ataques_fora = fora
+
+                    elif "shots on target" in nome or "chutes no gol" in nome:
+                        chutes_no_gol_casa = casa
+                        chutes_no_gol_fora = fora
+
+                    elif "shots" in nome or "finaliz" in nome:
+                        finalizacoes_casa = casa
+                        finalizacoes_fora = fora
+
+                    elif "possession" in nome or "posse" in nome:
+                        posse_casa = casa
+                        posse_fora = fora
+
+    # --------------------------------------------------------
+    # ÍNDICE DE PRESSÃO
+    # --------------------------------------------------------
+
+    pressao_casa = (
+        ataques_perigosos_casa * 2
+        + chutes_no_gol_casa * 4
+        + finalizacoes_casa * 1
+        + escanteios_casa * 2
     )
 
-    status = jogo.get(
-        "status", {}
+    pressao_fora = (
+        ataques_perigosos_fora * 2
+        + chutes_no_gol_fora * 4
+        + finalizacoes_fora * 1
+        + escanteios_fora * 2
     )
 
-    minuto = status.get(
-        "currentPeriodStartTimestamp"
-    )
+    pressao_total = pressao_casa + pressao_fora
 
-    descricao = status.get(
-        "description",
-        "Ao vivo"
-    )
+    # --------------------------------------------------------
+    # NÍVEL DE PRESSÃO
+    # --------------------------------------------------------
+
+    if pressao_total >= 60:
+        nivel = "🔥 MUITO ALTA"
+
+    elif pressao_total >= 40:
+        nivel = "🟠 ALTA"
+
+    elif pressao_total >= 20:
+        nivel = "🟡 MODERADA"
+
+    else:
+        nivel = "⚪ BAIXA"
+
+    # --------------------------------------------------------
+    # TIME MAIS ATIVO
+    # --------------------------------------------------------
+
+    if pressao_casa > pressao_fora:
+        time_pressao = nome_casa
+
+    elif pressao_fora > pressao_casa:
+        time_pressao = nome_fora
+
+    else:
+        time_pressao = "Equilibrado"
+
+    # --------------------------------------------------------
+    # RETORNO
+    # --------------------------------------------------------
 
     return {
-        "home": home,
-        "away": away,
-        "home_score": home_score,
-        "away_score": away_score,
-        "status": descricao,
-        "timestamp": minuto
+        "nome_casa": nome_casa,
+        "nome_fora": nome_fora,
+        "placar_casa": placar_casa,
+        "placar_fora": placar_fora,
+        "minuto": minuto,
+        "status": status,
+        "escanteios_casa": escanteios_casa,
+        "escanteios_fora": escanteios_fora,
+        "ataques_casa": ataques_casa,
+        "ataques_fora": ataques_fora,
+        "ataques_perigosos_casa": ataques_perigosos_casa,
+        "ataques_perigosos_fora": ataques_perigosos_fora,
+        "finalizacoes_casa": finalizacoes_casa,
+        "finalizacoes_fora": finalizacoes_fora,
+        "chutes_no_gol_casa": chutes_no_gol_casa,
+        "chutes_no_gol_fora": chutes_no_gol_fora,
+        "posse_casa": posse_casa,
+        "posse_fora": posse_fora,
+        "pressao_casa": pressao_casa,
+        "pressao_fora": pressao_fora,
+        "pressao_total": pressao_total,
+        "nivel": nivel,
+        "time_pressao": time_pressao
     }
 
 
 # ============================================================
-# ÍNDICE DE PRESSÃO
+# SIDEBAR
 # ============================================================
 
-def calcular_pressao(estatisticas, momentum):
+st.sidebar.header("⚙️ Configurações")
 
-    finalizacoes = pegar_stat(
-        estatisticas,
-        [
-            "Total shots",
-            "Shots"
-        ]
-    )
-
-    no_alvo = pegar_stat(
-        estatisticas,
-        [
-            "Shots on target"
-        ]
-    )
-
-    escanteios = pegar_stat(
-        estatisticas,
-        [
-            "Corner kicks"
-        ]
-    )
-
-    grandes_chances = pegar_stat(
-        estatisticas,
-        [
-            "Big chances"
-        ]
-    )
-
-    ataques_perigosos = pegar_stat(
-        estatisticas,
-        [
-            "Dangerous attacks"
-        ]
-    )
-
-    posse = pegar_stat(
-        estatisticas,
-        [
-            "Ball possession"
-        ]
-    )
-
-    # --------------------------------------------------------
-    # PONTUAÇÃO
-    # --------------------------------------------------------
-
-    casa = (
-        finalizacoes[0] * 2
-        + no_alvo[0] * 4
-        + escanteios[0] * 2
-        + grandes_chances[0] * 5
-        + ataques_perigosos[0] * 0.15
-    )
-
-    fora = (
-        finalizacoes[1] * 2
-        + no_alvo[1] * 4
-        + escanteios[1] * 2
-        + grandes_chances[1] * 5
-        + ataques_perigosos[1] * 0.15
-    )
-
-    # --------------------------------------------------------
-    # MOMENTUM
-    # --------------------------------------------------------
-
-    if momentum:
-
-        ultimos = momentum[-10:]
-
-        soma = 0
-
-        for ponto in ultimos:
-
-            soma += numero(
-                ponto.get("value", 0)
-            )
-
-        if soma > 0:
-            casa += min(soma * 0.15, 15)
-
-        elif soma < 0:
-            fora += min(abs(soma) * 0.15, 15)
-
-    # --------------------------------------------------------
-    # POSSE
-    # --------------------------------------------------------
-
-    if posse[0] > posse[1]:
-
-        casa += min(
-            (posse[0] - posse[1]) * 0.10,
-            5
-        )
-
-    elif posse[1] > posse[0]:
-
-        fora += min(
-            (posse[1] - posse[0]) * 0.10,
-            5
-        )
-
-    total = casa + fora
-
-    if total <= 0:
-
-        return 0, 0
-
-    percentual_casa = round(
-        (casa / total) * 100
-    )
-
-    percentual_fora = round(
-        (fora / total) * 100
-    )
-
-    return percentual_casa, percentual_fora
-
-
-# ============================================================
-# CLASSIFICAÇÃO
-# ============================================================
-
-def classificar_pressao(maior):
-
-    if maior >= 80:
-
-        return (
-            "🔥🔥 MUITO ALTA",
-            "danger"
-        )
-
-    if maior >= 70:
-
-        return (
-            "🔥 ALTA",
-            "warning"
-        )
-
-    if maior >= 55:
-
-        return (
-            "🟡 MODERADA",
-            "moderate"
-        )
-
-    return (
-        "🔵 BAIXA",
-        "low"
-    )
-
-
-# ============================================================
-# CONTAR CARTÕES
-# ============================================================
-
-def contar_cartoes(incidentes):
-
-    casa = 0
-    fora = 0
-
-    for incidente in incidentes:
-
-        if incidente.get("incidentType") != "card":
-            continue
-
-        classe = incidente.get(
-            "incidentClass",
-            ""
-        )
-
-        if classe not in [
-            "yellow",
-            "yellowRed",
-            "red"
-        ]:
-            continue
-
-        if incidente.get("isHome"):
-
-            casa += 1
-
-        else:
-
-            fora += 1
-
-    return casa, fora
-
-
-# ============================================================
-# INTERFACE LATERAL
-# ============================================================
-
-st.sidebar.header("⚙️ CONFIGURAÇÕES")
-
-auto = st.sidebar.checkbox(
-    "🔄 Atualização automática",
-    value=False
-)
-
-intervalo = st.sidebar.slider(
-    "Intervalo de atualização",
-    min_value=15,
+atualizacao = st.sidebar.slider(
+    "Atualização automática (segundos)",
+    min_value=10,
     max_value=120,
     value=30,
-    step=15
+    step=10
 )
 
-mostrar_estatisticas = st.sidebar.checkbox(
-    "📊 Mostrar estatísticas",
+mostrar_baixa = st.sidebar.checkbox(
+    "Mostrar jogos com pressão baixa",
     value=True
 )
-
-mostrar_incidentes = st.sidebar.checkbox(
-    "🟨 Mostrar cartões",
-    value=True
-)
-
-mostrar_momentum = st.sidebar.checkbox(
-    "📈 Mostrar momentum",
-    value=True
-)
-
-if st.sidebar.button("🔄 ATUALIZAR AGORA"):
-
-    st.rerun()
-
 
 # ============================================================
-# HORA
+# ATUALIZAÇÃO
 # ============================================================
 
-hora = datetime.now().strftime(
+agora = datetime.now().strftime(
     "%d/%m/%Y %H:%M:%S"
 )
 
 st.info(
-    f"🕐 Última atualização: {hora}"
+    f"🕐 Última atualização: {agora}"
 )
-
 
 # ============================================================
 # BUSCAR JOGOS
 # ============================================================
 
-with st.spinner(
-    "🔎 Procurando jogos ao vivo..."
-):
-
-    jogos = buscar_jogos_ao_vivo()
-
-
-# ============================================================
-# SEM JOGOS
-# ============================================================
+jogos = buscar_jogos_ao_vivo()
 
 if not jogos:
 
     st.warning(
-        "⚠️ Nenhum jogo de futebol ao vivo "
-        "foi encontrado neste momento."
+        "⚠️ Nenhum jogo de futebol ao vivo foi encontrado neste momento."
     )
 
-    st.caption(
-        "Quando houver partidas ao vivo, "
-        "elas aparecerão automaticamente aqui."
+    st.info(
+        "Quando houver partidas ao vivo, elas aparecerão automaticamente aqui."
     )
-
-
-# ============================================================
-# JOGOS ENCONTRADOS
-# ============================================================
 
 else:
 
     st.success(
-        f"⚽ {len(jogos)} jogos ao vivo encontrados"
+        f"⚽ {len(jogos)} jogo(s) encontrado(s) ao vivo."
     )
 
-    st.divider()
+    # ========================================================
+    # PROCESSAMENTO
+    # ========================================================
 
-    jogos = jogos[:MAX_JOGOS]
+    resultados = []
 
     for jogo in jogos:
 
-        event_id = jogo.get("id")
+        try:
 
-        analise = analisar_jogo(jogo)
+            analise = analisar_jogo(jogo)
 
-        home = analise["home"]
-        away = analise["away"]
+            resultados.append(analise)
 
-        placar_home = analise["home_score"]
-        placar_away = analise["away_score"]
+        except Exception as erro:
 
-        status = analise["status"]
-
-        # ====================================================
-        # CABEÇALHO
-        # ====================================================
-
-        st.markdown(
-            f"## ⚽ {home} "
-            f"**{placar_home} x {placar_away}** "
-            f"{away}"
-        )
-
-        st.caption(
-            f"⏱️ {status}   |   ID: {event_id}"
-        )
-
-        # ====================================================
-        # BUSCAR DADOS
-        # ====================================================
-
-        estatisticas = buscar_estatisticas(
-            event_id
-        )
-
-        incidentes = buscar_incidentes(
-            event_id
-        )
-
-        momentum = buscar_momentum(
-            event_id
-        )
-
-        # ====================================================
-        # PRESSÃO
-        # ====================================================
-
-        pressao_home, pressao_away = (
-            calcular_pressao(
-                estatisticas,
-                momentum
+            st.warning(
+                f"Erro ao analisar uma partida: {erro}"
             )
+
+    # ========================================================
+    # EXIBIÇÃO
+    # ========================================================
+
+    for jogo in resultados:
+
+        if (
+            not mostrar_baixa
+            and jogo["nivel"] == "⚪ BAIXA"
+        ):
+            continue
+
+        st.markdown("---")
+
+        col1, col2, col3 = st.columns(
+            [3, 2, 3]
         )
-
-        maior_pressao = max(
-            pressao_home,
-            pressao_away
-        )
-
-        if pressao_home >= pressao_away:
-
-            time_pressao = home
-
-        else:
-
-            time_pressao = away
-
-        classificacao, tipo = classificar_pressao(
-            maior_pressao
-        )
-
-        # ====================================================
-        # MÉTRICAS PRINCIPAIS
-        # ====================================================
-
-        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
 
+            st.subheader(
+                jogo["nome_casa"]
+            )
+
             st.metric(
-                f"🏠 {home}",
-                f"{pressao_home}%"
+                "Placar",
+                jogo["placar_casa"]
             )
 
         with col2:
 
-            st.metric(
-                f"✈️ {away}",
-                f"{pressao_away}%"
+            st.markdown(
+                f"### ⏱️ {jogo['minuto']}'"
+            )
+
+            st.write(
+                jogo["nivel"]
             )
 
         with col3:
 
-            st.metric(
-                "🔥 Pressão",
-                classificacao
+            st.subheader(
+                jogo["nome_fora"]
             )
 
-        with col4:
-
             st.metric(
-                "🎯 Líder",
-                time_pressao
+                "Placar",
+                jogo["placar_fora"]
             )
 
-        # ====================================================
-        # BARRA
-        # ====================================================
+        # ----------------------------------------------------
+        # PRESSÃO
+        # ----------------------------------------------------
 
-        st.progress(
-            min(maior_pressao / 100, 1.0)
+        st.markdown(
+            "### 🔥 Índice de pressão"
         )
 
-        # ====================================================
-        # ALERTAS
-        # ====================================================
+        p1, p2, p3 = st.columns(3)
 
-        if maior_pressao >= 80:
+        with p1:
 
-            st.error(
-                f"🚨 **CHANCE QUENTE DETECTADA**\n\n"
-                f"⚽ Maior pressão: {time_pressao}\n\n"
-                f"📊 Índice: {maior_pressao}%"
+            st.metric(
+                jogo["nome_casa"],
+                jogo["pressao_casa"]
             )
 
-        elif maior_pressao >= 70:
+        with p2:
 
-            st.warning(
-                f"🔥 **PRESSÃO ELEVADA**\n\n"
-                f"{time_pressao} está apresentando "
-                f"forte volume ofensivo.\n\n"
-                f"📊 Índice: {maior_pressao}%"
+            st.metric(
+                "Total",
+                jogo["pressao_total"]
             )
 
-        elif maior_pressao >= 55:
+        with p3:
 
-            st.info(
-                f"🟡 Pressão moderada de "
-                f"{time_pressao}."
+            st.metric(
+                jogo["nome_fora"],
+                jogo["pressao_fora"]
             )
 
-        else:
+        st.write(
+            f"🎯 Time com maior pressão: **{jogo['time_pressao']}**"
+        )
 
-            st.success(
-                "🔵 Nenhuma pressão ofensiva "
-                "elevada detectada."
-            )
-
-        # ====================================================
+        # ----------------------------------------------------
         # ESTATÍSTICAS
-        # ====================================================
+        # ----------------------------------------------------
 
-        if mostrar_estatisticas:
+        st.markdown(
+            "### 📊 Estatísticas ao vivo"
+        )
 
-            st.markdown(
-                "### 📊 Estatísticas"
+        e1, e2, e3, e4 = st.columns(4)
+
+        with e1:
+
+            st.metric(
+                "🚩 Escanteios",
+                f"{jogo['escanteios_casa']} x {jogo['escanteios_fora']}"
             )
 
-            finalizacoes = pegar_stat(
-                estatisticas,
-                [
-                    "Total shots",
-                    "Shots"
-                ]
+        with e2:
+
+            st.metric(
+                "⚡ Ataques perigosos",
+                f"{jogo['ataques_perigosos_casa']} x {jogo['ataques_perigosos_fora']}"
             )
 
-            no_alvo = pegar_stat(
-                estatisticas,
-                [
-                    "Shots on target"
-                ]
+        with e3:
+
+            st.metric(
+                "🥅 Finalizações",
+                f"{jogo['finalizacoes_casa']} x {jogo['finalizacoes_fora']}"
             )
 
-            escanteios = pegar_stat(
-                estatisticas,
-                [
-                    "Corner kicks"
-                ]
+        with e4:
+
+            st.metric(
+                "🎯 Chutes no gol",
+                f"{jogo['chutes_no_gol_casa']} x {jogo['chutes_no_gol_fora']}"
             )
 
-            posse = pegar_stat(
-                estatisticas,
-                [
-                    "Ball possession"
-                ]
-            )
+        # ----------------------------------------------------
+        # POSSE
+        # ----------------------------------------------------
 
-            grandes = pegar_stat(
-                estatisticas,
-                [
-                    "Big chances"
-                ]
-            )
-
-            ataques = pegar_stat(
-                estatisticas,
-                [
-                    "Dangerous attacks"
-                ]
-            )
-
-            c1, c2, c3 = st.columns(3)
-
-            with c1:
-
-                st.metric(
-                    "🎯 Finalizações",
-                    f"{finalizacoes[0]:g} x {finalizacoes[1]:g}"
-                )
-
-                st.metric(
-                    "🥅 No alvo",
-                    f"{no_alvo[0]:g} x {no_alvo[1]:g}"
-                )
-
-            with c2:
-
-                st.metric(
-                    "🚩 Escanteios",
-                    f"{escanteios[0]:g} x {escanteios[1]:g}"
-                )
-
-                st.metric(
-                    "🔥 Grandes chances",
-                    f"{grandes[0]:g} x {grandes[1]:g}"
-                )
-
-            with c3:
-
-                st.metric(
-                    "⚔️ Ataques perigosos",
-                    f"{ataques[0]:g} x {ataques[1]:g}"
-                )
-
-                st.metric(
-                    "🟢 Posse",
-                    f"{posse[0]:g}% x {posse[1]:g}%"
-                )
-
-        # ====================================================
-        # CARTÕES
-        # ====================================================
-
-        if mostrar_incidentes:
-
-            cartoes_home, cartoes_away = contar_cartoes(
-                incidentes
-            )
-
-            st.markdown(
-                "### 🟨 Cartões"
-            )
-
-            st.write(
-                f"🏠 {home}: **{cartoes_home}**"
-            )
-
-            st.write(
-                f"✈️ {away}: **{cartoes_away}**"
-            )
-
-        # ====================================================
-        # MOMENTUM
-        # ====================================================
-
-        if mostrar_momentum:
-
-            with st.expander(
-                "📈 Ver momentum"
-            ):
-
-                if momentum:
-
-                    valores = []
-
-                    for ponto in momentum:
-
-                        valores.append({
-                            "Minuto": ponto.get(
-                                "minute",
-                                0
-                            ),
-                            "Momentum": ponto.get(
-                                "value",
-                                0
-                            )
-                        })
-
-                    st.line_chart(
-                        valores,
-                        x="Minuto",
-                        y="Momentum"
-                    )
-
-                else:
-
-                    st.info(
-                        "Momentum não disponível."
-                    )
-
-        # ====================================================
-        # DETALHES
-        # ====================================================
-
-        with st.expander(
-            "🔎 Dados recebidos do SofaScore"
-        ):
-
-st.write(
-                f"Event ID: {event_id}"
-            )
-
-                st.write(
-                f"Total de estatísticas: "
-                f"{len(estatisticas)}"
-            )
-
-            st.write(
-                f"Total de incidentes: "
-                f"{len(incidentes)}"
-            )
-
-        st.divider()
-
+        st.write(
+            f"⚽ Posse de bola: "
+            f"**{jogo['posse_casa']}% x {jogo['posse_fora']}%**"
+        )
 
 # ============================================================
 # AVISO
 # ============================================================
 
-st.caption(
-    "⚠️ O índice de pressão é uma métrica experimental "
-    "criada pelo Robô V2. Não representa probabilidade "
-    "garantida de gol ou resultado."
-)
+st.markdown("---")
 
+st.caption(
+    "⚠️ O índice de pressão é uma métrica experimental criada pelo Robô V2. "
+    "Ele serve para organizar dados ao vivo e não representa probabilidade "
+    "garantida de resultado."
+)
 
 # ============================================================
 # ATUALIZAÇÃO AUTOMÁTICA
 # ============================================================
 
-if auto:
+time.sleep(atualizacao)
 
-    time.sleep(intervalo)
-
-    st.rerun()
+st.rerun()
