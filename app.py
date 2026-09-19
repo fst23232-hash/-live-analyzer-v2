@@ -73,7 +73,17 @@ def consultar_api(endpoint, parametros=None):
 # ==============================
 
 def buscar_jogos_ao_vivo():
+if st.button(
+    "🔄 ATUALIZAR JOGOS",
+    use_container_width=True
+):
 
+    jogos = buscar_jogos_ao_vivo()
+
+    # Limita a análise aos 5 primeiros jogos
+    jogos = jogos[:5]
+
+    st.session_state["jogos"] = jogos
     dados = consultar_api(
         "fixtures",
         {
