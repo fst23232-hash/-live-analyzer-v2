@@ -9,10 +9,7 @@ st.set_page_config(
     layout="wide"
 )
 # Atualização automática a cada 60 segundos
-st_autorefresh(
-    interval=60 * 1000,
-    key="atualizacao_automatica"
-)
+
 
 st.title("⚽ Robô V2 - Live Analyzer")
 st.caption("Análise automática de futebol ao vivo")
