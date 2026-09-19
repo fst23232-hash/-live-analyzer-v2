@@ -1,12 +1,10 @@
 import streamlit as st
 import requests
 from datetime import datetime
-from typing import Optional
 
-
-# ==========================================
+# ============================================================
 # CONFIGURAÇÃO
-# ==========================================
+# ============================================================
 
 st.set_page_config(
     page_title="Robô V2 - Live Analyzer",
@@ -15,636 +13,284 @@ st.set_page_config(
 )
 
 st.title("⚽ Robô V2 - Live Analyzer")
-st.caption("Análise estatística de futebol ao vivo")
+st.caption("Análise automática de jogos de futebol ao vivo")
 
+# ============================================================
+# CONFIGURAÇÕES DO SOFASCORE
+# ============================================================
 
-API_URL = "https://v3.football.api-sports.io"
+LIVE_URL = "https://www.sofascore.com/api/v1/sport/football/events/live"
 
-# Limite de segurança por atualização
-MAX_JOGOS = 5
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json"
+}
 
+MAX_JOGOS = 20
 
-# ==========================================
-# API KEY
-# ==========================================
+# ============================================================
+# BUSCAR JOGOS AO VIVO
+# ============================================================
 
-try:
-    API_KEY = st.secrets["API_FOOTBALL_KEY"]
-except Exception:
-    API_KEY = ""
-
-
-# ==========================================
-# CONTROLE DE STATUS
-# ==========================================
-
-if "ultima_atualizacao" not in st.session_state:
-    st.session_state["ultima_atualizacao"] = None
-
-if "jogos" not in st.session_state:
-    st.session_state["jogos"] = []
-
-if "erro_api" not in st.session_state:
-    st.session_state["erro_api"] = None
-
-
-# ==========================================
-# CONSULTAR API
-# ==========================================
-
-def consultar_api(endpoint, parametros=None):
-
-    if not API_KEY:
-        st.session_state["erro_api"] = (
-            "API Key não encontrada nos Secrets do Streamlit."
-        )
-        return None
+def buscar_jogos():
 
     try:
 
         resposta = requests.get(
-            f"{API_URL}/{endpoint}",
-            headers={
-                "x-apisports-key": API_KEY
-            },
-            params=parametros,
-            timeout=20
+            LIVE_URL,
+            headers=HEADERS,
+            timeout=15
         )
 
-        # Limite da API
-        if resposta.status_code == 429:
-
-            st.session_state["erro_api"] = (
-                "Limite de requisições da API atingido (HTTP 429)."
-            )
-
-            return None
-
-        # Problema de autorização
-        if resposta.status_code in (401, 403):
-
-            st.session_state["erro_api"] = (
-                f"API recusou a requisição (HTTP {resposta.status_code})."
-            )
-
-            return None
-
-        if resposta.status_code != 200:
-
-            st.session_state["erro_api"] = (
-                f"Erro da API: HTTP {resposta.status_code}"
-            )
-
-            return None
+        resposta.raise_for_status()
 
         dados = resposta.json()
 
-        if dados.get("errors"):
+        return dados.get("events", [])
 
-            erros = dados.get("errors")
+    except Exception as erro:
 
-            st.session_state["erro_api"] = (
-                f"API: {erros}"
-            )
+        st.error(f"Erro ao consultar o Sofascore: {erro}")
 
-            return None
-
-        st.session_state["erro_api"] = None
-
-        return dados
-
-    except requests.RequestException as erro:
-
-        st.session_state["erro_api"] = (
-            f"Erro de conexão: {erro}"
-        )
-
-        return None
-
-
-# ==========================================
-# BUSCAR JOGOS AO VIVO
-# ==========================================
-
-def buscar_jogos_ao_vivo():
-
-    dados = consultar_api(
-        "fixtures",
-        {
-            "live": "all"
-        }
-    )
-
-    if not dados:
         return []
 
-    return dados.get("response", [])
 
+# ============================================================
+# PEGAR ESTATÍSTICAS DO JOGO
+# ============================================================
 
-# ==========================================
-# BUSCAR ESTATÍSTICAS
-# ==========================================
+def buscar_estatisticas(event_id):
 
-@st.cache_data(ttl=120)
-def buscar_estatisticas(fixture_id):
-
-    dados = consultar_api(
-        "fixtures/statistics",
-        {
-            "fixture": fixture_id
-        }
+    url = (
+        f"https://www.sofascore.com/api/v1/event/"
+        f"{event_id}/statistics"
     )
-
-    if not dados:
-        return []
-
-    return dados.get("response", [])
-
-
-# ==========================================
-# CONVERTER VALOR
-# ==========================================
-
-def converter_inteiro(valor):
-
-    if valor is None:
-        return 0
 
     try:
 
-        if isinstance(valor, str):
-            valor = valor.replace("%", "").strip()
-
-        return int(valor)
-
-    except Exception:
-        return 0
-
-
-# ==========================================
-# EXTRAIR ESTATÍSTICAS
-# ==========================================
-
-def extrair_estatisticas(dados):
-
-    resultado = {
-        "escanteios_casa": 0,
-        "escanteios_fora": 0,
-        "chutes_casa": 0,
-        "chutes_fora": 0,
-        "chutes_alvo_casa": 0,
-        "chutes_alvo_fora": 0,
-        "posse_casa": 0,
-        "posse_fora": 0
-    }
-
-    if not dados or len(dados) < 2:
-        return resultado
-
-    for indice, equipe in enumerate(dados[:2]):
-
-        lado = "casa" if indice == 0 else "fora"
-
-        estatisticas = equipe.get(
-            "statistics",
-            []
+        resposta = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=10
         )
 
-        for item in estatisticas:
+        if resposta.status_code != 200:
+            return {}
 
-            nome = str(
-                item.get("type", "")
-            ).lower()
+        return resposta.json()
 
-            valor = item.get("value")
-
-            if valor is None:
-                continue
-
-            # --------------------------
-            # ESCANTEIOS
-            # --------------------------
-
-            if "corner" in nome:
-
-                resultado[
-                    f"escanteios_{lado}"
-                ] = converter_inteiro(valor)
-
-            # --------------------------
-            # CHUTES
-            # --------------------------
-
-            elif nome == "total shots":
-
-                resultado[
-                    f"chutes_{lado}"
-                ] = converter_inteiro(valor)
-
-            # --------------------------
-            # CHUTES NO ALVO
-            # --------------------------
-
-            elif "shots on goal" in nome:
-
-                resultado[
-                    f"chutes_alvo_{lado}"
-                ] = converter_inteiro(valor)
-
-            # --------------------------
-            # POSSE
-            # --------------------------
-
-            elif "ball possession" in nome:
-
-                resultado[
-                    f"posse_{lado}"
-                ] = converter_inteiro(valor)
-
-    return resultado
+    except Exception:
+        return {}
 
 
-# ==========================================
-# ANALISAR JOGO
-# ==========================================
+# ============================================================
+# CALCULAR SINAIS
+# ============================================================
 
 def analisar_jogo(jogo):
 
-    fixture = jogo.get(
-        "fixture",
-        {}
+    home = jogo.get("homeTeam", {}).get("name", "Casa")
+    away = jogo.get("awayTeam", {}).get("name", "Fora")
+
+    home_score = jogo.get("homeScore", {}).get("current", 0)
+    away_score = jogo.get("awayScore", {}).get("current", 0)
+
+    minuto = jogo.get("status", {}).get("period", "")
+
+    tempo = jogo.get("status", {}).get("type", "")
+
+    # --------------------------------------------------------
+    # SCORE
+    # --------------------------------------------------------
+
+    gols = home_score + away_score
+
+    # --------------------------------------------------------
+    # STATUS
+    # --------------------------------------------------------
+
+    status = jogo.get("status", {}).get(
+        "description",
+        "Ao vivo"
     )
 
-    teams = jogo.get(
-        "teams",
-        {}
-    )
-
-    goals = jogo.get(
-        "goals",
-        {}
-    )
-
-    fixture_id = fixture.get(
-        "id"
-    )
-
-    casa = teams.get(
-        "home",
-        {}
-    ).get(
-        "name",
-        "Casa"
-    )
-
-    fora = teams.get(
-        "away",
-        {}
-    ).get(
-        "name",
-        "Fora"
-    )
-
-    placar_casa = goals.get(
-        "home"
-    ) or 0
-
-    placar_fora = goals.get(
-        "away"
-    ) or 0
-
-    status = fixture.get(
-        "status",
-        {}
-    )
-
-    minuto = status.get(
-        "elapsed"
-    ) or 0
-
-    # ======================================
-    # ESTATÍSTICAS
-    # ======================================
-
-    dados_stats = buscar_estatisticas(
-        fixture_id
-    )
-
-    stats = extrair_estatisticas(
-        dados_stats
-    )
-
-    escanteios_casa = stats[
-        "escanteios_casa"
-    ]
-
-    escanteios_fora = stats[
-        "escanteios_fora"
-    ]
-
-    escanteios_total = (
-        escanteios_casa +
-        escanteios_fora
-    )
-
-    chutes_total = (
-        stats["chutes_casa"] +
-        stats["chutes_fora"]
-    )
-
-    chutes_alvo_total = (
-        stats["chutes_alvo_casa"] +
-        stats["chutes_alvo_fora"]
-    )
-
-    gols_total = (
-        placar_casa +
-        placar_fora
-    )
-
-    # ======================================
-    # PONTUAÇÃO
-    # ======================================
-
-    pontos = 0
-
-    sinais = []
-
-    if placar_casa == placar_fora:
-
-        pontos += 10
-
-        sinais.append(
-            "⚖️ Jogo empatado"
-        )
-
-    if escanteios_total >= 4:
-
-        pontos += 15
-
-        sinais.append(
-            "🚩 Volume de escanteios"
-        )
-
-    if escanteios_total >= 6:
-
-        pontos += 20
-
-        sinais.append(
-            "🔥 Muitos escanteios"
-        )
-
-    if escanteios_total >= 8:
-
-        pontos += 20
-
-        sinais.append(
-            "🚨 Volume muito alto de escanteios"
-        )
-
-    if chutes_total >= 10:
-
-        pontos += 10
-
-        sinais.append(
-            "🎯 Muitos chutes"
-        )
-
-    if chutes_alvo_total >= 5:
-
-        pontos += 15
-
-        sinais.append(
-            "🥅 Pressão com chutes no alvo"
-        )
-
-    if gols_total <= 1:
-
-        pontos += 10
-
-        sinais.append(
-            "⚽ Poucos gols até agora"
-        )
-
-    # ======================================
-    # NÍVEL
-    # ======================================
-
-    if pontos >= 60:
-
-        nivel = "🔥 CHANCE QUENTE"
-
-    elif pontos >= 40:
-
-        nivel = "🟠 ATENÇÃO"
-
-    elif pontos >= 25:
-
-        nivel = "🟡 MONITORAR"
-
-    else:
-
-        nivel = "⚪ NORMAL"
+    # --------------------------------------------------------
+    # INFORMAÇÕES BÁSICAS
+    # --------------------------------------------------------
 
     return {
-        "id": fixture_id,
-        "casa": casa,
-        "fora": fora,
-        "placar": f"{placar_casa} x {placar_fora}",
-        "minuto": minuto,
-        "escanteios": escanteios_total,
-        "escanteios_casa": escanteios_casa,
-        "escanteios_fora": escanteios_fora,
-        "chutes": chutes_total,
-        "chutes_alvo": chutes_alvo_total,
-        "pontos": pontos,
-        "nivel": nivel,
-        "sinais": sinais
+        "home": home,
+        "away": away,
+        "home_score": home_score,
+        "away_score": away_score,
+        "gols": gols,
+        "status": status,
+        "periodo": minuto,
+        "tempo": tempo
     }
 
 
-# ==========================================
-# BOTÃO DE ATUALIZAÇÃO
-# ==========================================
+# ============================================================
+# INTERFACE
+# ============================================================
 
-if st.button(
-    "🔄 ATUALIZAR JOGOS",
-    use_container_width=True
-):
+st.sidebar.header("⚙️ Configurações")
 
-    # Limpa o cache de estatísticas
-    buscar_estatisticas.clear()
+auto_atualizar = st.sidebar.checkbox(
+    "🔄 Atualização automática",
+    value=False
+)
 
-    # Uma única consulta para descobrir jogos
-    jogos = buscar_jogos_ao_vivo()
+if st.sidebar.button("🔄 Atualizar agora"):
 
-    # Limite de segurança
-    jogos = jogos[:MAX_JOGOS]
-
-    st.session_state["jogos"] = jogos
-
-    st.session_state["ultima_atualizacao"] = (
-        datetime.now()
-    )
+    st.rerun()
 
 
-# ==========================================
-# ERROS
-# ==========================================
+# ============================================================
+# HORA DA CONSULTA
+# ============================================================
 
-if st.session_state["erro_api"]:
+hora = datetime.now().strftime("%H:%M:%S")
 
-    st.error(
-        f"❌ {st.session_state['erro_api']}"
-    )
+st.info(
+    f"🕐 Última atualização: {hora}"
+)
 
 
-# ==========================================
-# EXIBIÇÃO
-# ==========================================
+# ============================================================
+# BUSCAR JOGOS
+# ============================================================
 
-if not st.session_state["jogos"]:
+with st.spinner("Buscando jogos ao vivo..."):
 
-    st.info(
-        "👆 Clique em 🔄 ATUALIZAR JOGOS "
-        "para consultar as partidas."
+    jogos = buscar_jogos()
+
+
+# ============================================================
+# RESULTADO
+# ============================================================
+
+if not jogos:
+
+    st.warning(
+        "⚠️ Nenhum jogo ao vivo encontrado no momento."
     )
 
 else:
 
-    jogos = st.session_state["jogos"]
-
     st.success(
-        f"⚽ {len(jogos)} jogos selecionados para análise"
+        f"⚽ {len(jogos)} jogos encontrados"
     )
 
-    if st.session_state["ultima_atualizacao"]:
+    st.divider()
 
-        hora = st.session_state[
-            "ultima_atualizacao"
-        ].strftime(
-            "%d/%m/%Y %H:%M:%S"
-        )
-
-        st.caption(
-            f"Última atualização: {hora}"
-        )
-
-    analises = []
-
-    # ======================================
-    # ANALISAR PARTIDAS
-    # ======================================
+    # Limita quantidade de jogos exibidos
+    jogos = jogos[:MAX_JOGOS]
 
     for jogo in jogos:
 
-        try:
+        analise = analisar_jogo(jogo)
 
-            analise = analisar_jogo(
-                jogo
-            )
+        event_id = jogo.get("id")
 
-            analises.append(
-                analise
-            )
+        home = analise["home"]
+        away = analise["away"]
 
-        except Exception:
+        home_score = analise["home_score"]
+        away_score = analise["away_score"]
 
-            continue
+        gols = analise["gols"]
 
-    analises.sort(
-        key=lambda x: x["pontos"],
-        reverse=True
-    )
+        status = analise["status"]
 
-    # ======================================
-    # MOSTRAR ANÁLISES
-    # ======================================
+        # ====================================================
+        # CARTÃO DO JOGO
+        # ====================================================
 
-    for analise in analises:
+        st.subheader(
+            f"⚽ {home}  {home_score} x "
+            f"{away_score}  {away}"
+        )
 
-        if analise["pontos"] < 20:
-            continue
-
-        st.markdown("---")
-
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
 
-            st.subheader(
-                f"🏟️ {analise['casa']} x "
-                f"{analise['fora']}"
-            )
-
-            st.write(
-                f"⏱️ {analise['minuto']}'"
+            st.metric(
+                "Placar",
+                f"{home_score} x {away_score}"
             )
 
         with col2:
 
             st.metric(
-                "Placar",
-                analise["placar"]
-            )
-
-            st.metric(
-                "🚩 Escanteios",
-                analise["escanteios"]
-            )
-
-            st.write(
-                f"Casa: {analise['escanteios_casa']} | "
-                f"Fora: {analise['escanteios_fora']}"
-            )
-
-            st.write(
-                f"🎯 Chutes: {analise['chutes']}"
-            )
-
-            st.write(
-                f"🥅 Chutes no alvo: "
-                f"{analise['chutes_alvo']}"
+                "Gols",
+                gols
             )
 
         with col3:
 
             st.metric(
-                "Pontuação",
-                f"{analise['pontos']} / 100"
+                "Status",
+                status
             )
 
-            st.write(
-                analise["nivel"]
-            )
+        with col4:
 
-        if analise["sinais"]:
-
-            st.write(
-                "📊 **Sinais detectados:**"
-            )
-
-            for sinal in analise["sinais"]:
+            if event_id:
 
                 st.write(
-                    f"- {sinal}"
+                    f"ID: {event_id}"
                 )
 
+        # ====================================================
+        # ANÁLISE INICIAL
+        # ====================================================
 
-# ==========================================
+        if gols == 0:
+
+            st.warning(
+                "🟡 Jogo sem gols até o momento."
+            )
+
+        elif gols >= 1:
+
+            st.success(
+                "🟢 Jogo já teve gol."
+            )
+
+        # ====================================================
+        # ESTATÍSTICAS
+        # ====================================================
+
+        if event_id:
+
+            with st.expander(
+                "📊 Ver estatísticas"
+            ):
+
+                estatisticas = buscar_estatisticas(
+                    event_id
+                )
+
+                if estatisticas:
+
+                    st.json(estatisticas)
+
+                else:
+
+                    st.info(
+                        "Estatísticas ainda não disponíveis."
+                    )
+
+        st.divider()
+
+
+# ============================================================
 # RODAPÉ
-# ==========================================
-
-st.markdown("---")
+# ============================================================
 
 st.caption(
-    "Robô V2.2 • "
-    + datetime.now().strftime(
-        "%d/%m/%Y %H:%M:%S"
-    )
-)
-
-st.warning(
-    "⚠️ Ferramenta de análise estatística. "
-    "Não garante resultados de apostas."
+    "Robô V2 • Dados de partidas do Sofascore • "
+    "Ferramenta experimental de análise esportiva"
 )
